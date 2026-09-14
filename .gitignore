@@ -1,0 +1,24 @@
+# WorkBuddy agent state (always local, never commit)
+.workbuddy/
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# SQLite databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Local config / secrets
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db
