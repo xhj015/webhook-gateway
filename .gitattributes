@@ -1,0 +1,22 @@
+# 统一换行符：仓库内一律存 LF，检出时也保持 LF。
+# 没有这一条，Windows 上每次 add 都会刷 "LF will be replaced by CRLF" 警告，
+# 且跨机器 diff 会失真（同一份文件看起来"整篇都改了"）。
+* text=auto eol=lf
+
+# Windows 批处理脚本必须保留 CRLF，否则 cmd.exe 解析会出问题。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件：Git 不要碰。
+*.exe binary
+*.dll  binary
+*.db   binary
+*.sqlite  binary
+*.sqlite3 binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
