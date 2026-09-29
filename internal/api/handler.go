@@ -17,11 +17,16 @@ import (
 type Handler struct {
 	store *store.Store
 	log   *slog.Logger
+
+	// wake 是唤醒 worker 的回调（实现是 worker.Notifier.Wake）。
+	// 存函数而不是具体类型：handler 层不需要知道 worker 包的存在，
+	// 依赖方向保持 api → store 单向；测试时塞个空函数即可。
+	wake func()
 }
 
-// NewHandler 组装一个 Handler。
-func NewHandler(st *store.Store, log *slog.Logger) *Handler {
-	return &Handler{store: st, log: log}
+// NewHandler 组装一个 Handler。wake 允许传 nil（没有 worker 时静默跳过唤醒）。
+func NewHandler(st *store.Store, log *slog.Logger, wake func()) *Handler {
+	return &Handler{store: st, log: log, wake: wake}
 }
 
 // errorResponse 所有错误响应的统一形状。

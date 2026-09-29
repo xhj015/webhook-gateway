@@ -19,7 +19,9 @@ import (
 	"time"
 
 	"github.com/xhj015/webhook-gateway/internal/api"
+	"github.com/xhj015/webhook-gateway/internal/delivery"
 	"github.com/xhj015/webhook-gateway/internal/store"
+	"github.com/xhj015/webhook-gateway/internal/worker"
 )
 
 func main() {
@@ -51,10 +53,18 @@ func run(logger *slog.Logger, dbPath string, port int) error {
 	}
 	defer st.Close()
 
+	// W4：后台 worker 与 HTTP 服务跑在同一个进程里，但互不依赖——
+	// worker 的每一步都只跟数据库打交道，HTTP handler 只负责往库里写。
+	// 两者唯一的接触点是 wake 信号（落库成功后喊一嗓子），这正是
+	// "数据库是唯一真相来源"在进程结构上的体现。
+	notifier := worker.NewNotifier()
+	go worker.New(st, delivery.NewClient(), logger, notifier.C()).Run(ctx)
+	logger.Info("后台 worker 已启动", "tick_interval", "1s")
+
 	addr := fmt.Sprintf(":%d", port)
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: api.NewRouter(api.NewHandler(st, logger)),
+		Handler: api.NewRouter(api.NewHandler(st, logger, notifier.Wake)),
 
 		// 这几个超时是防"慢速攻击"的：一个客户端只连上不干活，
 		// 不带超时的服务器会一直占着连接不放。

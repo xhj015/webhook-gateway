@@ -31,7 +31,7 @@ type receiveHookResponse struct {
 //	① 校验端点存在   → 不存在 404
 //	② 读原始 body    → 超过 1 MB 413
 //	③ 落库（pending）→ 失败 500，绝不能返回 202
-//	④ 唤醒 worker    → 事务提交之后才发信号（W4 接上）
+//	④ 唤醒 worker    → 事务提交之后才发信号
 //	⑤ 返回 202 + event_id
 //
 // 核心是第 ③ 步永远排在第 ⑤ 步之前：**202 只代表"我记住了"，不代表"我送到了"**。
@@ -90,10 +90,12 @@ func (h *Handler) receiveHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ④ 事务已提交，现在才可以发唤醒信号。
-	// W3 还没有 worker，所以这一行先留空——等 W4 把 worker 接上再打开。
+	// ④ 事务已提交，现在才可以发唤醒信号（W4 接上）。
 	// 顺序要点：信号必须晚于落库。反过来等于让 worker 去捞一条还不存在的记录。
-	// h.wake()
+	// 信号本身可丢（Notifier 容量 1，满了自动丢弃）——worker 每秒都有兜底扫描。
+	if h.wake != nil {
+		h.wake()
+	}
 
 	h.log.Info("事件已接收",
 		"event_id", ev.ID,
