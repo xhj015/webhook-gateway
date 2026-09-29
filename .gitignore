@@ -27,6 +27,9 @@ bin/
 .env
 .env.*
 
+# Local curl 测试用的临时请求体
+ep.json
+
 # OS files
 .DS_Store
 Thumbs.db
