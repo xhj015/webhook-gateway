@@ -2,10 +2,13 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/xhj015/webhook-gateway/internal/idgen"
 	"github.com/xhj015/webhook-gateway/internal/store"
@@ -74,12 +77,74 @@ func (h *Handler) createEndpoint(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("端点已创建", "endpoint_id", ep.ID, "name", ep.Name, "url", ep.URL)
 
-	writeJSON(w, http.StatusCreated, endpointResponse{
+	writeJSON(w, http.StatusCreated, toEndpointResponse(ep))
+}
+
+// toEndpointResponse 把 store.Endpoint 转成对外表示。创建、列表、停用三处共用，保证字段一致。
+func toEndpointResponse(ep store.Endpoint) endpointResponse {
+	return endpointResponse{
 		ID:        ep.ID,
 		Name:      ep.Name,
 		URL:       ep.URL,
 		Enabled:   ep.Enabled,
 		HookPath:  "/hooks/" + ep.ID,
 		CreatedAt: ep.CreatedAt,
-	})
+	}
+}
+
+// listEndpoints 处理 GET /api/endpoints：列出全部投递目标。
+func (h *Handler) listEndpoints(w http.ResponseWriter, r *http.Request) {
+	eps, err := h.store.ListEndpoints(r.Context())
+	if err != nil {
+		h.log.Error("查询端点列表失败", "err", err)
+		writeError(w, http.StatusInternalServerError, "查询端点列表失败")
+		return
+	}
+
+	out := make([]endpointResponse, 0, len(eps))
+	for _, ep := range eps {
+		out = append(out, toEndpointResponse(ep))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"endpoints": out})
+}
+
+// disableEndpoint 处理 POST /api/endpoints/{id}/disable：停用一个投递目标。
+//
+// 幂等：对已停用的端点再停一次，仍然返回 200，不会报错。
+// 停用只影响新事件，在途事件继续投完（B10）——这个语义由 store.DisableEndpoint 只改 endpoints 一行来保证。
+func (h *Handler) disableEndpoint(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := chi.URLParam(r, "id")
+
+	ep, err := h.store.GetEndpoint(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "端点不存在: "+id)
+		return
+	}
+	if err != nil {
+		h.log.Error("查询端点失败", "err", err, "endpoint_id", id)
+		writeError(w, http.StatusInternalServerError, "查询端点失败")
+		return
+	}
+
+	changed, err := h.store.DisableEndpoint(ctx, id, time.Now().Unix())
+	if err != nil {
+		h.log.Error("停用端点失败", "err", err, "endpoint_id", id)
+		writeError(w, http.StatusInternalServerError, "停用端点失败")
+		return
+	}
+	if changed {
+		h.log.Info("端点已停用", "endpoint_id", id, "name", ep.Name)
+	} else {
+		h.log.Info("端点已处于停用状态，跳过", "endpoint_id", id)
+	}
+
+	// 停用后 enabled 必为 false，其余字段沿用刚读到的 ep
+	writeJSON(w, http.StatusOK, toEndpointResponse(store.Endpoint{
+		ID:        ep.ID,
+		Name:      ep.Name,
+		URL:       ep.URL,
+		Enabled:   false,
+		CreatedAt: ep.CreatedAt,
+	}))
 }

@@ -26,15 +26,19 @@ type receiveHookResponse struct {
 
 // receiveHook 处理 POST /hooks/{endpointID}——事件的出生地（docs/02-flow.md 2.1 节）。
 //
-// 五步，顺序不能变：
+// 接收侧校验三步（业务规则 B1 / B2 / B3），顺序不能变：
 //
-//	① 校验端点存在   → 不存在 404
-//	② 读原始 body    → 超过 1 MB 413
-//	③ 落库（pending）→ 失败 500，绝不能返回 202
-//	④ 唤醒 worker    → 事务提交之后才发信号
-//	⑤ 返回 202 + event_id
+//	① 端点不存在   → 404
+//	② 端点已停用   → 410（B2：停用的端点拒收新事件）
+//	③ body 超 1 MB → 413
 //
-// 核心是第 ③ 步永远排在第 ⑤ 步之前：**202 只代表"我记住了"，不代表"我送到了"**。
+// 校验全过后才是真正的"接收"：
+//
+//	④ 落库（pending）→ 失败 500，绝不能返回 202
+//	⑤ 唤醒 worker    → 事务提交之后才发信号
+//	⑥ 返回 202 + event_id
+//
+// 核心是第 ④ 步永远排在最后一步之前：**202 只代表"我记住了"，不代表"我送到了"**。
 func (h *Handler) receiveHook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	endpointID := chi.URLParam(r, "endpointID")
@@ -51,11 +55,15 @@ func (h *Handler) receiveHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(W5, 业务规则 B2)：端点已停用时返回 410。
-	// W3 的垂直切片先不收这个口子——但要知道它现在是个洞：停用的端点仍然收事件。
-	_ = ep
+	// ② 端点已停用则拒收（B2 → 410）。
+	// 停用只影响"新事件"：已经落库的在途事件照常投完（B10）。
+	// 这里只在入口拦这一下，不改库、不影响在途事件。
+	if !ep.Enabled {
+		writeError(w, http.StatusGone, "端点已停用: "+endpointID)
+		return
+	}
 
-	// ② 读原始 body。用 MaxBytesReader 而不是直接 io.ReadAll：
+	// ③ 读原始 body。用 MaxBytesReader 而不是直接 io.ReadAll：
 	// 后者会把任意大小的请求体读进内存，一条 1 GB 的请求就能把进程撑死。
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPayloadBytes))
 	if err != nil {
@@ -68,7 +76,7 @@ func (h *Handler) receiveHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ③ 落库（B4）。注意 body 是 []byte 原文，不做任何解析——
+	// ④ 落库（B4）。注意 body 是 []byte 原文，不做任何解析——
 	// 网关是透明管道，不允许改动用户的字节（docs/04-data-model.md 4.1 节）。
 	now := time.Now().Unix()
 	ev := store.Event{
@@ -90,7 +98,7 @@ func (h *Handler) receiveHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ④ 事务已提交，现在才可以发唤醒信号（W4 接上）。
+	// ⑤ 事务已提交，现在才可以发唤醒信号（W4 接上）。
 	// 顺序要点：信号必须晚于落库。反过来等于让 worker 去捞一条还不存在的记录。
 	// 信号本身可丢（Notifier 容量 1，满了自动丢弃）——worker 每秒都有兜底扫描。
 	if h.wake != nil {
@@ -103,7 +111,7 @@ func (h *Handler) receiveHook(w http.ResponseWriter, r *http.Request) {
 		"bytes", len(body),
 	)
 
-	// ⑤ 202 Accepted = 请求已受理，但处理还没完成。这个状态码是整条链路的语义锚点。
+	// ⑥ 202 Accepted = 请求已受理，但处理还没完成。这个状态码是整条链路的语义锚点。
 	writeJSON(w, http.StatusAccepted, receiveHookResponse{EventID: ev.ID, Status: ev.Status})
 }
 

@@ -7,15 +7,19 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// NewRouter 装配全部路由。接口清单见 docs/01-business.md 与后续的 docs/05-api.md。
+// NewRouter 装配全部路由。接口清单见 docs/01-business.md 与 docs/05-api.md。
 //
-// W3 只开三个口子：
+// 完整清单（9 条，V0.1 全部实现）：
 //
-//	GET  /healthz              存活探针
-//	POST /api/endpoints        创建投递目标（没有它就没法演示接收）
-//	POST /hooks/{endpointID}   事件入口 → 落库 → 202
-//
-// 其余接口按执行计划在各里程碑里逐个加上。
+//	GET  /healthz                      存活探针
+//	POST /api/endpoints                创建投递目标
+//	GET  /api/endpoints                列出全部投递目标
+//	POST /api/endpoints/{id}/disable   停用一个投递目标（B2/B10）
+//	POST /hooks/{endpointID}           事件入口 → 落库 → 202
+//	GET  /api/events                   事件列表（可按 status 过滤、分页）
+//	GET  /api/events/{id}              事件详情（含 payload / headers）
+//	GET  /api/events/{id}/attempts     投递历史（审计记录）
+//	POST /api/events/{id}/retry        手动重试（仅 failed，B11/B12/B13）
 func NewRouter(h *Handler) http.Handler {
 	r := chi.NewRouter()
 	r.Use(h.accessLog)
@@ -24,6 +28,13 @@ func NewRouter(h *Handler) http.Handler {
 
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/endpoints", h.createEndpoint)
+		r.Get("/endpoints", h.listEndpoints)
+		r.Post("/endpoints/{id}/disable", h.disableEndpoint)
+
+		r.Get("/events", h.listEvents)
+		r.Get("/events/{id}", h.getEvent)
+		r.Get("/events/{id}/attempts", h.listAttempts)
+		r.Post("/events/{id}/retry", h.retryEvent)
 	})
 
 	r.Post("/hooks/{endpointID}", h.receiveHook)
