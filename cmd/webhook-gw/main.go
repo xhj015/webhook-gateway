@@ -16,6 +16,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/xhj015/webhook-gateway/internal/api"
@@ -44,7 +46,10 @@ func main() {
 
 // run 把真正的启动逻辑收在这里，方便以后写测试或加优雅退出。
 func run(logger *slog.Logger, dbPath string, port int) error {
-	ctx := context.Background()
+	// ctx 生命周期 = 进程生命周期：收到 Ctrl+C / SIGTERM 时被取消。
+	// worker 的 Run 里 select 监听 ctx.Done()，取消即退出；HTTP 侧靠下面 srv.Shutdown 停。
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// 打开库 = 连接 + 必要时建表（幂等），失败就直接退出，不要带着坏状态硬跑
 	st, err := store.Open(ctx, dbPath)
@@ -53,7 +58,7 @@ func run(logger *slog.Logger, dbPath string, port int) error {
 	}
 	defer st.Close()
 
-	// W4：后台 worker 与 HTTP 服务跑在同一个进程里，但互不依赖——
+	// 后台 worker 与 HTTP 服务跑在同一个进程里，但互不依赖——
 	// worker 的每一步都只跟数据库打交道，HTTP handler 只负责往库里写。
 	// 两者唯一的接触点是 wake 信号（落库成功后喊一嗓子），这正是
 	// "数据库是唯一真相来源"在进程结构上的体现。
@@ -74,12 +79,28 @@ func run(logger *slog.Logger, dbPath string, port int) error {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	logger.Info("webhook-gateway 已启动", "addr", addr, "db", dbPath)
+	// 优雅退出：ListenAndServe 会阻塞，放到独立 goroutine 里，
+	// 主 goroutine 用 select 同时等"服务自己出错"和"收到退出信号"。
+	// 收到信号后先给在途请求 5 秒的收尾窗口，再关服务器；worker 因 ctx 取消同步退出。
+	errCh := make(chan error, 1)
+	go func() {
+		logger.Info("webhook-gateway 已启动", "addr", addr, "db", dbPath)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
 
-	// 优雅退出（收到信号后先把在途请求处理完再停）留到 M8 工程化那一周再做，
-	// 现在要的就是"能跑起来"。
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	select {
+	case err := <-errCh:
 		return fmt.Errorf("HTTP 服务失败: %w", err)
+	case <-ctx.Done():
+		logger.Info("收到退出信号，开始优雅停机")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("优雅停机失败: %w", err)
+		}
+		logger.Info("HTTP 服务已停机")
+		return nil
 	}
-	return nil
 }
