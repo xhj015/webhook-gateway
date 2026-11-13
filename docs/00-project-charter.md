@@ -125,9 +125,9 @@ Webhook Gateway 恰好落在三者交集上：纯后端、技术密度高、范�
 | docs/00-project-charter.md | 本文档：总纲 | ✅ |
 | docs/01-business.md | 业务逻辑 V0.1 | ✅ |
 | docs/02-flow.md | 完整业务流程 | ✅ |
-| docs/03-scope.md | V0.1 功能边界 | 待写 |
-| docs/04-data-model.md | 数据库表设计 | 待写 |
-| docs/05-api.md | API 设计 | 待写 |
+| docs/03-scope.md | V0.1 功能边界与 Backlog | ✅ |
+| docs/04-data-model.md | 数据库表设计 | ✅ |
+| docs/05-api.md | API 设计 | ✅ |
 
 ---
 

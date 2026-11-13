@@ -1,0 +1,11 @@
+.git
+.gitignore
+.workbuddy
+docs
+*.md
+*.db
+*.db-*
+*.exe
+bin/
+.env
+ep.json
